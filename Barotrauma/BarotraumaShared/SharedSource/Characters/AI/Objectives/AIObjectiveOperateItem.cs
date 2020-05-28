@@ -3,7 +3,6 @@ using Microsoft.Xna.Framework;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using Barotrauma.Extensions;
 
 namespace Barotrauma
 {
@@ -29,9 +28,15 @@ namespace Barotrauma
         public ItemComponent GetTarget() => useController ? controller : component;
 
         public Func<bool> completionCondition;
+        private bool isDoneOperating;
 
         public override float GetPriority()
         {
+            if (!IsAllowed)
+            {
+                Priority = 0;
+                return Priority;
+            }
             if (component.Item.ConditionPercentage <= 0)
             {
                 Priority = 0;
@@ -42,38 +47,78 @@ namespace Barotrauma
                 {
                     Priority = AIObjectiveManager.OrderPriority;
                 }
-
-                if (component.Item.CurrentHull == null || component.Item.CurrentHull.FireSources.Any() || HumanAIController.IsItemOperatedByAnother(GetTarget(), out _))
+                ItemComponent target = GetTarget();
+                Item targetItem = target?.Item;
+                if (targetItem == null)
+                {
+#if DEBUG
+                    DebugConsole.ThrowError("Item or component of AI Objective Operate item was null. This shouldn't happen.");
+#endif
+                    Abandon = true;
+                    Priority = 0;
+                    return Priority;
+                }
+                var reactor = component?.Item.GetComponent<Reactor>();
+                if (reactor != null)
+                {
+                    switch (Option)
+                    {
+                        case "shutdown":
+                            if (!reactor.PowerOn)
+                            {
+                                Priority = 0;
+                                return Priority;
+                            }
+                            break;
+                        case "powerup":
+                            // Check that we don't already have another order that is targeting the same item.
+                            // Without this the autonomous objective will tell the bot to turn the reactor on again.
+                            if (objectiveManager.CurrentOrder is AIObjectiveOperateItem operateOrder && operateOrder != this && operateOrder.GetTarget() == target)
+                            {
+                                Priority = 0;
+                                return Priority;
+                            }
+                            break;
+                    }
+                }
+                if (targetItem.CurrentHull == null || targetItem.CurrentHull.FireSources.Any() || HumanAIController.IsItemOperatedByAnother(target, out _))
                 {
                     Priority = 0;
                 }
-                else if (Character.CharacterList.Any(c => c.CurrentHull == component.Item.CurrentHull && !HumanAIController.IsFriendly(c) && HumanAIController.IsActive(c)))
+                else if (Character.CharacterList.Any(c => c.CurrentHull == targetItem.CurrentHull && !HumanAIController.IsFriendly(c) && HumanAIController.IsActive(c)))
                 {
                     Priority = 0;
                 }
                 else
                 {
                     float value = CumulatedDevotion + (AIObjectiveManager.OrderPriority * PriorityModifier);
-                    float max = MathHelper.Min((AIObjectiveManager.OrderPriority - 1), 90);
+                    float max = objectiveManager.CurrentOrder == this ? MathHelper.Min(AIObjectiveManager.OrderPriority, 90) : AIObjectiveManager.RunPriority - 1;
                     Priority = MathHelper.Clamp(value, 0, max);
                 }
             }
             return Priority;
         }
 
-        public AIObjectiveOperateItem(ItemComponent item, Character character, AIObjectiveManager objectiveManager, string option, bool requireEquip, Entity operateTarget = null, bool useController = false, float priorityModifier = 1) 
-            : base (character, objectiveManager, priorityModifier, option)
+        public AIObjectiveOperateItem(ItemComponent item, Character character, AIObjectiveManager objectiveManager, string option, bool requireEquip,
+            Entity operateTarget = null, bool useController = false, ItemComponent controller = null, float priorityModifier = 1)
+            : base(character, objectiveManager, priorityModifier, option)
         {
-            this.component = item ?? throw new System.ArgumentNullException("item", "Attempted to create an AIObjectiveOperateItem with a null target.");
+            component = item ?? throw new ArgumentNullException("item", "Attempted to create an AIObjectiveOperateItem with a null target.");
             this.requireEquip = requireEquip;
             this.operateTarget = operateTarget;
             this.useController = useController;
-            if (useController)
+            if (useController) { this.controller = controller ?? component?.Item?.FindController(); }
+            var target = GetTarget();
+            if (target == null)
             {
-                //try finding the controller with the simpler non-recursive method first
-                controller =
-                        component.Item.GetConnectedComponents<Controller>().FirstOrDefault() ??
-                        component.Item.GetConnectedComponents<Controller>(recursive: true).FirstOrDefault();
+#if DEBUG
+                throw new Exception("target null");
+#endif
+                Abandon = true;
+            }
+            else if (target.Item.NonInteractable)
+            {
+                Abandon = true;
             }
         }
 
@@ -108,7 +153,7 @@ namespace Barotrauma
                     }
                     if (component.AIOperate(deltaTime, character, this))
                     {
-                        IsCompleted = completionCondition == null || completionCondition();
+                        isDoneOperating = completionCondition == null || completionCondition();
                     }
                 }
                 else
@@ -117,7 +162,7 @@ namespace Barotrauma
                     {
                         DialogueIdentifier = "dialogcannotreachtarget",
                         TargetName = target.Item.Name
-                    }, 
+                    },
                         onAbandon: () => Abandon = true,
                         onCompleted: () => RemoveSubObjective(ref goToObjective));
                 }
@@ -132,7 +177,7 @@ namespace Barotrauma
                 }
                 else if (!character.Inventory.Items.Contains(component.Item))
                 {
-                    TryAddSubObjective(ref getItemObjective, () => new AIObjectiveGetItem(character, component.Item, objectiveManager, equip: true), 
+                    TryAddSubObjective(ref getItemObjective, () => new AIObjectiveGetItem(character, component.Item, objectiveManager, equip: true),
                         onAbandon: () => Abandon = true,
                         onCompleted: () => RemoveSubObjective(ref getItemObjective));
                 }
@@ -175,12 +220,12 @@ namespace Barotrauma
                     }
                     if (component.AIOperate(deltaTime, character, this))
                     {
-                        IsCompleted = completionCondition == null || completionCondition();
+                        isDoneOperating = completionCondition == null || completionCondition();
                     }
                 }
             }
         }
 
-        protected override bool Check() => IsCompleted && !IsLoop;
+        protected override bool Check() => isDoneOperating && !IsLoop;
     }
 }

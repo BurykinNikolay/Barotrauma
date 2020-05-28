@@ -2,7 +2,7 @@
 using Microsoft.Xna.Framework;
 using System;
 using System.Collections.Generic;
-using System.IO;
+using Barotrauma.IO;
 using System.Linq;
 using System.Xml.Linq;
 
@@ -10,10 +10,13 @@ namespace Barotrauma
 {
     partial class ItemAssemblyPrefab : MapEntityPrefab
     {
-        private string name;
+        private readonly string name;
         public override string Name { get { return name; } }
 
         public static readonly PrefabCollection<ItemAssemblyPrefab> Prefabs = new PrefabCollection<ItemAssemblyPrefab>();
+
+        public static readonly string VanillaSaveFolder = Path.Combine("Content", "Items", "Assemblies");
+        public static readonly string SaveFolder = "ItemAssemblies";
 
         private bool disposed = false;
         public override void Dispose()
@@ -55,7 +58,7 @@ namespace Barotrauma
             DisplayEntities = new List<Pair<MapEntityPrefab, Rectangle>>();
             foreach (XElement entityElement in doc.Root.Elements())
             {
-                string identifier = entityElement.GetAttributeString("identifier", "");
+                string identifier = entityElement.GetAttributeString("identifier", entityElement.Name.ToString().ToLowerInvariant());
                 MapEntityPrefab mapEntity = List.FirstOrDefault(p => p.Identifier == identifier);
                 if (mapEntity == null)
                 {
@@ -64,9 +67,9 @@ namespace Barotrauma
                 }
 
                 Rectangle rect = entityElement.GetAttributeRect("rect", Rectangle.Empty);
-                if (mapEntity != null && !entityElement.GetAttributeBool("hideinassemblypreview", false))
+                if (mapEntity != null && !entityElement.Elements().Any(e => e.Name.LocalName.Equals("wire", StringComparison.OrdinalIgnoreCase)))
                 {
-                    DisplayEntities.Add(new Pair<MapEntityPrefab, Rectangle>(mapEntity, rect));
+                    if (!entityElement.GetAttributeBool("hideinassemblypreview", false)) { DisplayEntities.Add(new Pair<MapEntityPrefab, Rectangle>(mapEntity, rect)); }
                     minX = Math.Min(minX, rect.X);
                     minY = Math.Min(minY, rect.Y - rect.Height);
                     maxX = Math.Max(maxX, rect.Right);
@@ -74,7 +77,9 @@ namespace Barotrauma
                 }
             }
 
-            Bounds = new Rectangle(minX, minY, maxX - minX, maxY - minY);
+            Bounds = minX == int.MaxValue ?
+                new Rectangle(0, 0, 1, 1) :
+                new Rectangle(minX, minY, maxX - minX, maxY - minY);
 
             Prefabs.Add(this, false);
         }
@@ -89,7 +94,7 @@ namespace Barotrauma
             CreateInstance(rect.Location.ToVector2(), Submarine.MainSub);
         }
 
-        public List<MapEntity> CreateInstance(Vector2 position, Submarine sub)
+        public List<MapEntity> CreateInstance(Vector2 position, Submarine sub, bool selectPrefabs = false)
         {
             List<MapEntity> entities = MapEntity.LoadAll(sub, configElement, FilePath);
             if (entities.Count == 0) return entities;
@@ -107,10 +112,10 @@ namespace Barotrauma
 
             MapEntity.MapLoaded(entities, true);
 #if CLIENT
-            if (Screen.Selected == GameMain.SubEditorScreen)
+            if (Screen.Selected == GameMain.SubEditorScreen && selectPrefabs)
             {
                 MapEntity.SelectedList.Clear();
-                entities.ForEach(e => MapEntity.AddSelection(e));
+                entities.ForEach(MapEntity.AddSelection);
             }
 #endif   
             return entities;
@@ -142,11 +147,14 @@ namespace Barotrauma
 
             List<string> itemAssemblyFiles = new List<string>();
 
-            //find assembly files in the item assembly folder
-            string directoryPath = Path.Combine("Content", "Items", "Assemblies");
-            if (Directory.Exists(directoryPath))
+            //find assembly files in the item assembly folders
+            if (Directory.Exists(VanillaSaveFolder))
             {
-                itemAssemblyFiles.AddRange(Directory.GetFiles(directoryPath));
+                itemAssemblyFiles.AddRange(Directory.GetFiles(VanillaSaveFolder));
+            }
+            if (Directory.Exists(SaveFolder))
+            {
+                itemAssemblyFiles.AddRange(Directory.GetFiles(SaveFolder));
             }
 
             //find assembly files in selected content packages

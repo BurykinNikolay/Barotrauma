@@ -171,7 +171,7 @@ namespace Barotrauma.Items.Components
             outputContainer.Inventory.Locked = true;
 
             currPowerConsumption = powerConsumption;
-            currPowerConsumption *= MathHelper.Lerp(1.5f, 1.0f, item.Condition / item.MaxCondition);
+            item.GetComponent<Repairable>()?.AdjustPowerConsumption(ref currPowerConsumption);
 
             if (GameMain.NetworkMember?.IsServer ?? true)
             {
@@ -180,7 +180,7 @@ namespace Barotrauma.Items.Components
 #if SERVER
             if (user != null)
             {
-                GameServer.Log(user.LogName + " started fabricating " + selectedItem.DisplayName + " in " + item.Name, ServerLog.MessageType.ItemInteraction);
+                GameServer.Log(GameServer.CharacterLogName(user) + " started fabricating " + selectedItem.DisplayName + " in " + item.Name, ServerLog.MessageType.ItemInteraction);
             }
 #endif
         }
@@ -216,7 +216,7 @@ namespace Barotrauma.Items.Components
 #if SERVER
             if (user != null)
             {
-                GameServer.Log(user.LogName + " cancelled the fabrication of " + fabricatedItem.DisplayName + " in " + item.Name, ServerLog.MessageType.ItemInteraction);
+                GameServer.Log(GameServer.CharacterLogName(user) + " cancelled the fabrication of " + fabricatedItem.DisplayName + " in " + item.Name, ServerLog.MessageType.ItemInteraction);
             }
 #endif
         }

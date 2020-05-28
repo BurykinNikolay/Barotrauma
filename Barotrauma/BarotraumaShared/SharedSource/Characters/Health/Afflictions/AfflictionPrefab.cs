@@ -189,6 +189,7 @@ namespace Barotrauma
         }
 
         public static AfflictionPrefab InternalDamage;
+        public static AfflictionPrefab ImpactDamage;
         public static AfflictionPrefab Bleeding;
         public static AfflictionPrefab Burn;
         public static AfflictionPrefab OxygenLow;
@@ -265,7 +266,8 @@ namespace Barotrauma
         public readonly Sprite Icon;
         public readonly Color[] IconColors;
 
-        private List<Effect> effects = new List<Effect>();
+        private readonly List<Effect> effects = new List<Effect>();
+        public IEnumerable<Effect> Effects => effects;
 
         private readonly string typeName;
 
@@ -290,6 +292,7 @@ namespace Barotrauma
         {
             CPRSettings.Unload();
             InternalDamage = null;
+            ImpactDamage = null;
             Bleeding = null;
             Burn = null;
             OxygenLow = null;
@@ -436,6 +439,9 @@ namespace Barotrauma
                     case "internaldamage":
                         InternalDamage = prefab;
                         break;
+                    case "blunttrauma":
+                        ImpactDamage = prefab;
+                        break;
                     case "bleeding":
                         Bleeding = prefab;
                         break;
@@ -455,6 +461,8 @@ namespace Barotrauma
                         Stun = prefab;
                         break;
                 }
+                if (ImpactDamage == null) { ImpactDamage = InternalDamage; }
+
                 if (prefab != null)
                 {
                     Prefabs.Add(prefab, isOverride);

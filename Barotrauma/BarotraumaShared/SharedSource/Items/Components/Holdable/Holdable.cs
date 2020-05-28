@@ -3,6 +3,7 @@ using FarseerPhysics;
 using FarseerPhysics.Dynamics;
 using FarseerPhysics.Dynamics.Contacts;
 using Microsoft.Xna.Framework;
+using System;
 using System.Collections.Generic;
 using System.Xml.Linq;
 
@@ -309,8 +310,13 @@ namespace Barotrauma.Items.Components
         {
             picker = character;
 
-            if (character != null) item.Submarine = character.Submarine;
+            if (item.Removed)
+            {
+                DebugConsole.ThrowError($"Attempted to equip a removed item ({item.Name})\n" + Environment.StackTrace);
+                return;
+            }
 
+            if (character != null) { item.Submarine = character.Submarine; }
             if (item.body == null)
             {
                 if (body != null)
@@ -325,8 +331,8 @@ namespace Barotrauma.Items.Components
 
             if (!item.body.Enabled)
             {
-                Limb rightHand = picker.AnimController.GetLimb(LimbType.RightHand);
-                item.SetTransform(rightHand.SimPosition, 0.0f);
+                Limb hand = picker.AnimController.GetLimb(LimbType.RightHand) ?? picker.AnimController.GetLimb(LimbType.LeftHand);
+                item.SetTransform(hand != null ? hand.SimPosition : character.SimPosition, 0.0f);
             }
 
             bool alreadyEquipped = character.HasEquippedItem(item);
@@ -344,7 +350,7 @@ namespace Barotrauma.Items.Components
                 IsActive = true;
 
 #if SERVER
-                if (!alreadyEquipped) GameServer.Log(character.LogName + " equipped " + item.Name, ServerLog.MessageType.ItemInteraction);
+                if (!alreadyEquipped) GameServer.Log(GameServer.CharacterLogName(character) + " equipped " + item.Name, ServerLog.MessageType.ItemInteraction);
 #endif
             }
         }
@@ -355,7 +361,7 @@ namespace Barotrauma.Items.Components
 
             picker.DeselectItem(item);
 #if SERVER
-            GameServer.Log(character.LogName + " unequipped " + item.Name, ServerLog.MessageType.ItemInteraction);
+            GameServer.Log(GameServer.CharacterLogName(character) + " unequipped " + item.Name, ServerLog.MessageType.ItemInteraction);
 #endif
 
             item.body.PhysEnabled = true;
@@ -363,38 +369,59 @@ namespace Barotrauma.Items.Components
             IsActive = false;
         }
 
-        public bool CanBeAttached()
+        public bool CanBeAttached(Character user)
         {
-            if (!attachable || !Reattachable) return false;
+            if (!attachable || !Reattachable) { return false; }
 
             //can be attached anywhere in sub editor
-            if (Screen.Selected == GameMain.SubEditorScreen) return true;
+            if (Screen.Selected == GameMain.SubEditorScreen) { return true; }
+
+            Vector2 attachPos = user == null ? item.WorldPosition : GetAttachPosition(user, useWorldCoordinates: true);
 
             //can be attached anywhere inside hulls
-            if (item.CurrentHull != null) return true;
+            if (item.CurrentHull != null && Submarine.RectContains(item.CurrentHull.WorldRect, attachPos)) { return true; }
 
-            return Structure.GetAttachTarget(item.WorldPosition) != null;
+            return Structure.GetAttachTarget(attachPos) != null;
         }
         
         public bool CanBeDeattached()
         {
-            if (!attachable || !attached) return true;
+            if (!attachable || !attached) { return true; }
 
             //allow deattaching everywhere in sub editor
-            if (Screen.Selected == GameMain.SubEditorScreen) return true;
+            if (Screen.Selected == GameMain.SubEditorScreen) { return true; }
 
-            //don't allow deattaching if part of a sub and outside hulls
-            return item.Submarine == null || item.CurrentHull != null;
+            //if the item has a connection panel and rewiring is disabled, don't allow deattaching
+            var connectionPanel = item.GetComponent<ConnectionPanel>();
+            if (connectionPanel != null && (connectionPanel.Locked || !(GameMain.NetworkMember?.ServerSettings?.AllowRewiring ?? true)))
+            {
+                return false;
+            }
+
+            if (item.CurrentHull == null)
+            {
+                return Structure.GetAttachTarget(item.WorldPosition) != null;
+            }
+            else
+            {
+                return true;
+            }
         }
 
         public override bool Pick(Character picker)
         {
+            if (item.Removed)
+            {
+                DebugConsole.ThrowError($"Attempted to pick up a removed item ({item.Name})\n" + Environment.StackTrace);
+                return false;
+            }
+
             if (!attachable)
             {
                 return base.Pick(picker);
             }
 
-            if (!CanBeDeattached()) return false;
+            if (!CanBeDeattached()) { return false; }
 
             if (Attached)
             {
@@ -419,7 +446,7 @@ namespace Barotrauma.Items.Components
                     item.CreateServerEvent(this);
                     if (picker != null)
                     {
-                        GameServer.Log(picker.LogName + " detached " + item.Name + " from a wall", ServerLog.MessageType.ItemInteraction);
+                        GameServer.Log(GameServer.CharacterLogName(picker) + " detached " + item.Name + " from a wall", ServerLog.MessageType.ItemInteraction);
                     }
                 }
 #endif
@@ -486,7 +513,7 @@ namespace Barotrauma.Items.Components
             if (character != null)
             {
                 if (!character.IsKeyDown(InputType.Aim)) { return false; }
-                if (!CanBeAttached()) { return false; }
+                if (!CanBeAttached(character)) { return false; }
 
                 if (GameMain.NetworkMember != null)
                 {
@@ -515,7 +542,7 @@ namespace Barotrauma.Items.Components
                 else
                 {
                     item.Drop(character);
-                    item.SetTransform(ConvertUnits.ToSimUnits(GetAttachPosition(character)), 0.0f);
+                    item.SetTransform(ConvertUnits.ToSimUnits(GetAttachPosition(character)), 0.0f, findNewHull: false);
                 }
             }
 
@@ -524,16 +551,18 @@ namespace Barotrauma.Items.Components
             return true;
         }
 
-        private Vector2 GetAttachPosition(Character user)
+        private Vector2 GetAttachPosition(Character user, bool useWorldCoordinates = false)
         {
-            if (user == null) { return item.Position; }
+            if (user == null) { return useWorldCoordinates ? item.WorldPosition : item.Position; }
 
             Vector2 mouseDiff = user.CursorWorldPosition - user.WorldPosition;
             mouseDiff = mouseDiff.ClampLength(MaxAttachDistance);
 
+            Vector2 userPos = useWorldCoordinates ? user.WorldPosition : user.Position;
+
             return new Vector2(
-                MathUtils.RoundTowardsClosest(user.Position.X + mouseDiff.X, Submarine.GridSize.X),
-                MathUtils.RoundTowardsClosest(user.Position.Y + mouseDiff.Y, Submarine.GridSize.Y));
+                MathUtils.RoundTowardsClosest(userPos.X + mouseDiff.X, Submarine.GridSize.X),
+                MathUtils.RoundTowardsClosest(userPos.Y + mouseDiff.Y, Submarine.GridSize.Y));
         }
 
         public override void UpdateBroken(float deltaTime, Camera cam)

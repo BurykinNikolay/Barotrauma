@@ -27,6 +27,8 @@ namespace Barotrauma.Items.Components
 
         private FixActions requestStartFixAction;
 
+        public float FakeBrokenTimer;
+
         [Serialize("", false, description: "An optional description of the needed repairs displayed in the repair interface.")]
         public string Description
         {
@@ -43,7 +45,7 @@ namespace Barotrauma.Items.Components
         public override bool ShouldDrawHUD(Character character)
         {
             if (!HasRequiredItems(character, false) || character.SelectedConstruction != item) return false;
-            return !item.IsFullCondition || character.IsTraitor && item.ConditionPercentage > MinSabotageCondition || (CurrentFixer == character && (!item.IsFullCondition || (character.IsTraitor && item.ConditionPercentage > MinSabotageCondition)));
+            return item.ConditionPercentage < RepairThreshold || character.IsTraitor && item.ConditionPercentage > MinSabotageCondition || (CurrentFixer == character && (!item.IsFullCondition || (character.IsTraitor && item.ConditionPercentage > MinSabotageCondition)));
         }
 
         partial void InitProjSpecific(XElement element)
@@ -117,9 +119,18 @@ namespace Barotrauma.Items.Components
                     case "emitter":
                     case "particleemitter":
                         particleEmitters.Add(new ParticleEmitter(subElement));
-                        particleEmitterConditionRanges.Add(new Vector2(
-                            subElement.GetAttributeFloat("mincondition", 0.0f), 
-                            subElement.GetAttributeFloat("maxcondition", 100.0f)));
+                        float minCondition = subElement.GetAttributeFloat("mincondition", 0.0f);
+                        float maxCondition = subElement.GetAttributeFloat("maxcondition", 100.0f);
+
+                        if (maxCondition < minCondition)
+                        {
+                            DebugConsole.ThrowError("Invalid damage particle configuration in the Repairable component of " + item.Name + ". MaxCondition needs to be larger than MinCondition.");
+                            float temp = maxCondition;
+                            maxCondition = minCondition;
+                            minCondition = temp;
+                        }
+                        particleEmitterConditionRanges.Add(new Vector2(minCondition, maxCondition));
+
                         break;
                 }
             }
@@ -127,6 +138,17 @@ namespace Barotrauma.Items.Components
 
         partial void UpdateProjSpecific(float deltaTime)
         {
+            if (Character.Controlled == null || (Character.Controlled.CharacterHealth.GetAffliction("psychosis")?.Strength ?? 0.0f) <= 0.0f)
+            {
+                FakeBrokenTimer = 0.0f;
+            }
+            else
+            {
+                FakeBrokenTimer -= deltaTime;
+            }
+
+            item.FakeBroken = FakeBrokenTimer > 0.0f;
+
             if (!GameMain.IsMultiplayer)
             {
                 switch (requestStartFixAction)
@@ -141,10 +163,10 @@ namespace Barotrauma.Items.Components
                         break;
                 }
             }
-            
+
             for (int i = 0; i < particleEmitters.Count; i++)
             {
-                if (item.ConditionPercentage >= particleEmitterConditionRanges[i].X && item.ConditionPercentage <= particleEmitterConditionRanges[i].Y)
+                if ((item.ConditionPercentage >= particleEmitterConditionRanges[i].X && item.ConditionPercentage <= particleEmitterConditionRanges[i].Y) || FakeBrokenTimer > 0.0f)
                 {
                     particleEmitters[i].Emit(deltaTime, item.WorldPosition, item.CurrentHull);
                 }
